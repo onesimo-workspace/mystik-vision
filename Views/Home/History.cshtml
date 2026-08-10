@@ -1,0 +1,62 @@
+@model IReadOnlyList<app_dev_assignment.Models.HistoryItem>
+
+@{
+    ViewData["Title"] = "History";
+}
+
+<div class="space-y-6">
+    <section class="rounded-3xl border border-slate-200 bg-white p-6 shadow-block">
+        <div class="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+            <div>
+                <p class="text-xs uppercase tracking-[0.3em] text-slate-400">History</p>
+                <h2 class="mt-2 text-2xl font-semibold text-slate-900">Recent image analyses</h2>
+            </div>
+            <p class="text-sm text-slate-600">Your last sessions are shown in reverse chronological order.</p>
+        </div>
+    </section>
+
+    @if (!Model.Any())
+    {
+        <section class="rounded-3xl border border-slate-200 bg-white p-8 text-center shadow-block">
+            <p class="text-lg font-medium text-slate-900">No history yet</p>
+            <p class="mt-2 text-sm text-slate-600">Analyze an image first and come back to see your recent results.</p>
+        </section>
+    }
+    else
+    {
+        <div class="grid gap-6">
+            @foreach (var item in Model)
+            {
+                <article class="rounded-3xl border border-slate-200 bg-white p-6 shadow-block">
+                    <div class="flex flex-col gap-4 xl:flex-row xl:items-start">
+                        <div class="min-w-[220px] overflow-hidden rounded-3xl border border-slate-200 bg-slate-50 xl:w-72">
+                            <img src="@item.ImageUrl" alt="History image" class="h-48 w-full object-cover" />
+                        </div>
+                        <div class="flex-1 space-y-4">
+                            <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                                <div>
+                                    <p class="text-sm font-semibold text-slate-900">@item.Description</p>
+                                    <p class="mt-1 text-xs uppercase tracking-[0.3em] text-slate-400">@item.CreatedAt.ToString("MMM d, yyyy h:mm tt")</p>
+                                </div>
+                                <span class="inline-flex rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">@(item.IsCached ? "Cached" : "Live")</span>
+                            </div>
+                            <div class="flex flex-wrap gap-3">
+                                @if (item.Tags.Any())
+                                {
+                                    foreach (var tag in item.Tags)
+                                    {
+                                        <span class="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-sm text-slate-700">@tag</span>
+                                    }
+                                }
+                                else
+                                {
+                                    <span class="text-sm text-slate-500">No tags detected.</span>
+                                }
+                            </div>
+                        </div>
+                    </div>
+                </article>
+            }
+        </div>
+    }
+</div>

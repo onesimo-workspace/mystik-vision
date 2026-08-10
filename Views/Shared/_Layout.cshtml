@@ -1,0 +1,64 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>@ViewData["Title"] - Vision Studio</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <style>
+        body {
+            font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: #f8fafc;
+            color: #0f172a;
+        }
+        .shadow-block {
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06), 0 1px 3px rgba(15, 23, 42, 0.08);
+        }
+    </style>
+</head>
+<body class="min-h-screen text-slate-900">
+    <div class="min-h-screen flex bg-slate-50">
+        <aside class="w-72 border-r border-slate-200 bg-white">
+            <div class="px-6 py-6">
+                <div class="flex items-center gap-3">
+                    <div class="inline-flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-block">
+                        <svg viewBox="0 0 24 24" fill="none" class="h-5 w-5" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M5 12L19 4L15 20L9 14L5 12Z" fill="currentColor" opacity="0.24" />
+                            <path d="M11.25 5.5L12.5 2.75L13.75 5.5L16.75 6.5L14 8.5L14.75 11.5L12.5 10.5L10.25 11.5L11 8.5L8.25 6.5L11.25 5.5Z" fill="currentColor" />
+                            <path d="M18.5 15.75L21.65 14L18.5 12.25L16.75 9.1L15 12.25L11.85 14L15 15.75L16.75 18.9L18.5 15.75Z" fill="currentColor" opacity="0.6" />
+                        </svg>
+                    </div>
+                    <div>
+                        <div class="text-2xl font-semibold tracking-tight">Mystik Vision</div>
+                        <p class="mt-2 text-sm text-slate-500">AI image analysis with Azure Vision.</p>
+                    </div>
+                </div>
+            </div>
+            <nav class="px-4 py-3 space-y-1">
+                <a class="block rounded-3xl px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100" asp-controller="Home" asp-action="Index">Analyze</a>
+                <a class="block rounded-3xl px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-100" asp-controller="Home" asp-action="History">History</a>
+            </nav>
+        </aside>
+        <div class="flex-1">
+            <header class="border-b border-slate-200 bg-white/90 backdrop-blur-sm">
+                <div class="mx-auto max-w-6xl px-6 py-5">
+                    <div class="flex flex-col gap-2">
+                        <h1 class="text-xl font-semibold text-slate-900">@ViewData["Title"]</h1>
+                        <p class="text-sm leading-6 text-slate-500">Upload an image and review intelligent, easy-to-read insights in a calm, content-focused layout.</p>
+                    </div>
+                </div>
+            </header>
+            <main class="mx-auto max-w-6xl px-6 py-8">
+                @RenderBody()
+            </main>
+        </div>
+    </div>
+    <footer class="border-t border-slate-200 bg-white">
+        <div class="mx-auto max-w-6xl px-6 py-4 text-xs text-slate-500">© 2026 Vision Studio</div>
+    </footer>
+    @RenderSection("Scripts", required: false)
+</body>
+</html>
