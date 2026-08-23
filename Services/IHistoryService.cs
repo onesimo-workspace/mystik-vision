@@ -4,6 +4,6 @@ namespace app_dev_assignment.Services;
 
 public interface IHistoryService
 {
-    void Add(HistoryItem item);
-    IReadOnlyList<HistoryItem> GetAll();
+    void Add(string visitorId, HistoryItem item);
+    IReadOnlyList<HistoryItem> GetAll(string visitorId);
 }
