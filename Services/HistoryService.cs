@@ -5,19 +5,23 @@ namespace app_dev_assignment.Services;
 
 public sealed class HistoryService : IHistoryService
 {
-    private readonly ConcurrentQueue<HistoryItem> _history = new();
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<HistoryItem>> _historyByVisitor = new();
     private const int MaxItems = 30;
 
-    public void Add(HistoryItem item)
+    public void Add(string visitorId, HistoryItem item)
     {
-        _history.Enqueue(item);
-        while (_history.Count > MaxItems && _history.TryDequeue(out _))
+        var history = _historyByVisitor.GetOrAdd(visitorId, _ => new ConcurrentQueue<HistoryItem>());
+        history.Enqueue(item);
+
+        while (history.Count > MaxItems && history.TryDequeue(out _))
         {
         }
     }
 
-    public IReadOnlyList<HistoryItem> GetAll()
+    public IReadOnlyList<HistoryItem> GetAll(string visitorId)
     {
-        return _history.Reverse().ToArray();
+        return _historyByVisitor.TryGetValue(visitorId, out var history)
+            ? history.Reverse().ToArray()
+            : Array.Empty<HistoryItem>();
     }
 }
