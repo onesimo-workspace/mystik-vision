@@ -19,29 +19,20 @@ public sealed class VisionService : IVisionService
         _endpoint = configuration["AzureVision:Endpoint"]?.TrimEnd('/') ?? string.Empty;
         _subscriptionKey = configuration["AzureVision:Key"]?.Trim() ?? string.Empty;
 
-        if (string.IsNullOrWhiteSpace(_endpoint))
-        {
-            throw new ArgumentException("AzureVision:Endpoint must be configured.", nameof(configuration));
-        }
+        if (string.IsNullOrWhiteSpace(_endpoint) || _endpoint.Contains("REPLACE_WITH", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("AzureVision:Endpoint must be configured with a real endpoint.", nameof(configuration));
+        if (string.IsNullOrWhiteSpace(_subscriptionKey) || _subscriptionKey.Contains("REPLACE_WITH", StringComparison.OrdinalIgnoreCase))
+            throw new ArgumentException("AzureVision:Key must be configured with a real key.", nameof(configuration));
 
-        if (string.IsNullOrWhiteSpace(_subscriptionKey))
-        {
-            throw new ArgumentException("AzureVision:Key must be configured.", nameof(configuration));
-        }
+        _httpClient.Timeout = TimeSpan.FromSeconds(45);
     }
 
     public async Task<VisionAnalysisResult> AnalyzeImageAsync(string imageUrl, byte[] imageBytes, CancellationToken cancellationToken = default)
     {
         var cacheKey = GetCacheKey(imageBytes);
-
         if (_cache.TryGetValue(cacheKey, out VisionAnalysisResult? cachedResult) && cachedResult is not null)
         {
-            return new VisionAnalysisResult
-            {
-                Description = cachedResult.Description,
-                Tags = cachedResult.Tags,
-                IsCached = true
-            };
+            return new VisionAnalysisResult { Description = cachedResult.Description, Tags = cachedResult.Tags, IsCached = true };
         }
 
         var requestUri = new Uri($"{_endpoint}/vision/v3.2/analyze?visualFeatures=Description,Tags,Objects,Categories,Color,ImageType,Brands,Faces&details=Celebrities,Landmarks&language=en");
@@ -51,124 +42,80 @@ public sealed class VisionService : IVisionService
 
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
-
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
         var result = new VisionAnalysisResult
         {
-            Description = BuildDetailedDescription(document),
+            Description = BuildScholarlyDescription(document),
             Tags = ParseTags(document),
             IsCached = false
         };
-
-        _cache.Set(cacheKey, result, new MemoryCacheEntryOptions
-        {
-            SlidingExpiration = TimeSpan.FromHours(1)
-        });
-
+        _cache.Set(cacheKey, result, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromHours(1) });
         return result;
     }
 
-    private static string BuildDetailedDescription(JsonDocument document)
+    private static string BuildScholarlyDescription(JsonDocument document)
     {
-        var parts = new List<string>();
+        var paragraphs = new List<string>();
         var caption = ParseCaption(document);
-        if (!string.IsNullOrWhiteSpace(caption))
-        {
-            parts.Add(caption.TrimEnd('.') + ".");
-        }
-
-        var objects = ParseNames(document, "objects");
-        if (objects.Count > 0)
-        {
-            parts.Add($"The image contains {JoinNatural(objects)}.");
-        }
-
-        var categories = ParseNames(document, "categories");
-        if (categories.Count > 0)
-        {
-            parts.Add($"It appears to show {JoinNatural(categories)}.");
-        }
-
-        var colors = ParseColorSummary(document);
-        if (!string.IsNullOrWhiteSpace(colors))
-        {
-            parts.Add(colors);
-        }
-
+        var objects = ParseNames(document, "objects", 0.55);
+        var categories = ParseNames(document, "categories", 0.45);
         var tags = ParseTags(document);
-        if (tags.Count > 0)
-        {
-            parts.Add($"Notable concepts include {JoinNatural(tags.Take(8).ToList())}.");
-        }
+        var colors = ParseColorSummary(document);
 
-        return parts.Count > 0
-            ? string.Join(" ", parts)
-            : "No detailed description was available for this image.";
+        if (!string.IsNullOrWhiteSpace(caption))
+            paragraphs.Add($"At a high level, the image presents {caption.TrimEnd('.')}.");
+
+        if (objects.Count > 0)
+            paragraphs.Add($"The most salient visible subjects are {JoinNatural(objects)}. These detections describe recognizable visual entities rather than asserting their purpose, identity, or activity beyond what the image evidence supports.");
+
+        if (categories.Count > 0)
+            paragraphs.Add($"In terms of setting and visual classification, the scene is consistent with {JoinNatural(categories)}.");
+
+        if (!string.IsNullOrWhiteSpace(colors))
+            paragraphs.Add(colors);
+
+        if (tags.Count > 0)
+            paragraphs.Add($"Additional visual concepts include {JoinNatural(tags.Take(8).ToList())}. Taken together, these signals suggest the image should be read as a composition organized around its principal subjects, surrounding context, and color relationships, while avoiding claims that cannot be directly established from pixels alone.");
+
+        return paragraphs.Count > 0
+            ? string.Join(" ", paragraphs)
+            : "The analysis service did not return sufficient visual evidence to produce a reliable detailed description.";
     }
 
     private static string ParseCaption(JsonDocument document)
     {
-        if (document.RootElement.TryGetProperty("description", out var description) &&
-            description.TryGetProperty("captions", out var captions) &&
-            captions.ValueKind == JsonValueKind.Array && captions.GetArrayLength() > 0 &&
-            captions[0].TryGetProperty("text", out var text))
-        {
+        if (document.RootElement.TryGetProperty("description", out var description) && description.TryGetProperty("captions", out var captions) && captions.ValueKind == JsonValueKind.Array && captions.GetArrayLength() > 0 && captions[0].TryGetProperty("text", out var text))
             return text.GetString() ?? string.Empty;
-        }
-
         return string.Empty;
     }
 
-    private static IReadOnlyList<string> ParseTags(JsonDocument document)
-    {
-        return ParseNames(document, "tags");
-    }
+    private static IReadOnlyList<string> ParseTags(JsonDocument document) => ParseNames(document, "tags", 0.55);
 
-    private static List<string> ParseNames(JsonDocument document, string propertyName)
+    private static List<string> ParseNames(JsonDocument document, string propertyName, double minimumConfidence)
     {
         var names = new List<string>();
-        if (!document.RootElement.TryGetProperty(propertyName, out var elements) || elements.ValueKind != JsonValueKind.Array)
-        {
-            return names;
-        }
-
+        if (!document.RootElement.TryGetProperty(propertyName, out var elements) || elements.ValueKind != JsonValueKind.Array) return names;
         foreach (var element in elements.EnumerateArray())
         {
-            if (element.TryGetProperty("name", out var name) && !string.IsNullOrWhiteSpace(name.GetString()))
-            {
-                var value = name.GetString()!;
-                if (!names.Contains(value, StringComparer.OrdinalIgnoreCase))
-                {
-                    names.Add(value);
-                }
-            }
+            var confidence = element.TryGetProperty("confidence", out var confidenceElement) ? confidenceElement.GetDouble() : 1.0;
+            if (confidence < minimumConfidence || !element.TryGetProperty("name", out var name)) continue;
+            var value = name.GetString();
+            if (!string.IsNullOrWhiteSpace(value) && !names.Contains(value, StringComparer.OrdinalIgnoreCase)) names.Add(value);
         }
-
         return names;
     }
 
     private static string ParseColorSummary(JsonDocument document)
     {
-        if (!document.RootElement.TryGetProperty("color", out var color))
+        if (!document.RootElement.TryGetProperty("color", out var color)) return string.Empty;
+        var values = new[]
         {
-            return string.Empty;
-        }
-
-        var dominant = color.TryGetProperty("dominantColorForeground", out var foreground)
-            ? foreground.GetString()
-            : null;
-        var background = color.TryGetProperty("dominantColorBackground", out var backgroundElement)
-            ? backgroundElement.GetString()
-            : null;
-
-        if (string.IsNullOrWhiteSpace(foreground) && string.IsNullOrWhiteSpace(background))
-        {
-            return string.Empty;
-        }
-
-        return $"The dominant colors are {JoinNatural(new[] { foreground, background }.Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToList())}.";
+            color.TryGetProperty("dominantColorForeground", out var foreground) ? foreground.GetString() : null,
+            color.TryGetProperty("dominantColorBackground", out var background) ? background.GetString() : null
+        }.Where(value => !string.IsNullOrWhiteSpace(value)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        return values.Count == 0 ? string.Empty : $"Chromatically, the dominant visual fields are {JoinNatural(values)}, which provides a useful account of the image's overall tonal balance.";
     }
 
     private static string JoinNatural(IReadOnlyList<string> values)
@@ -181,7 +128,6 @@ public sealed class VisionService : IVisionService
     private static string GetCacheKey(byte[] imageBytes)
     {
         using var sha256 = SHA256.Create();
-        var hash = sha256.ComputeHash(imageBytes);
-        return "vision-analysis-" + Convert.ToHexString(hash);
+        return "vision-analysis-" + Convert.ToHexString(sha256.ComputeHash(imageBytes));
     }
 }
