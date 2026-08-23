@@ -1,11 +1,13 @@
 using app_dev_assignment.Models;
 using app_dev_assignment.Services;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 
 namespace app_dev_assignment.Controllers;
 
 public class HomeController : Controller
 {
+    private const string VisitorCookieName = "mystik_visitor";
     private readonly IBlobService _blobService;
     private readonly IVisionService _visionService;
     private readonly IHistoryService _historyService;
@@ -24,8 +26,11 @@ public class HomeController : Controller
     }
 
     [HttpPost]
+    [ValidateAntiForgeryToken]
     public async Task<IActionResult> Index(ImageUploadViewModel model, CancellationToken cancellationToken)
     {
+        var visitorId = GetOrCreateVisitorId();
+
         if (model.ImageFile is null || model.ImageFile.Length == 0)
         {
             ModelState.AddModelError("ImageFile", "Please select an image to analyze.");
@@ -43,8 +48,9 @@ public class HomeController : Controller
         model.Tags = analysis.Tags;
         model.IsCached = analysis.IsCached;
 
-        _historyService.Add(new HistoryItem
+        _historyService.Add(visitorId, new HistoryItem
         {
+            VisitorId = visitorId,
             ImageUrl = uploadedUrl,
             Description = analysis.Description,
             Tags = analysis.Tags,
@@ -58,7 +64,26 @@ public class HomeController : Controller
     [HttpGet]
     public IActionResult History()
     {
-        var items = _historyService.GetAll();
-        return View(items);
+        return View(_historyService.GetAll(GetOrCreateVisitorId()));
+    }
+
+    private string GetOrCreateVisitorId()
+    {
+        if (Request.Cookies.TryGetValue(VisitorCookieName, out var existingId) && Guid.TryParse(existingId, out _))
+        {
+            return existingId;
+        }
+
+        var visitorId = Guid.NewGuid().ToString("N");
+        Response.Cookies.Append(VisitorCookieName, visitorId, new CookieOptions
+        {
+            HttpOnly = true,
+            IsEssential = true,
+            SameSite = SameSiteMode.Lax,
+            Secure = Request.IsHttps,
+            MaxAge = TimeSpan.FromDays(365)
+        });
+
+        return visitorId;
     }
 }
