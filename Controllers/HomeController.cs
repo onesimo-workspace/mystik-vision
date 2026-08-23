@@ -20,13 +20,11 @@ public class HomeController : Controller
     }
 
     [HttpGet]
-    public IActionResult Index()
-    {
-        return View(new ImageUploadViewModel());
-    }
+    public IActionResult Index() => View(new ImageUploadViewModel());
 
     [HttpPost]
     [ValidateAntiForgeryToken]
+    [RequestSizeLimit(10 * 1024 * 1024)]
     public async Task<IActionResult> Index(ImageUploadViewModel model, CancellationToken cancellationToken)
     {
         var visitorId = GetOrCreateVisitorId();
@@ -37,35 +35,39 @@ public class HomeController : Controller
             return View(model);
         }
 
-        var uploadedUrl = await _blobService.UploadFileAsync(model.ImageFile, cancellationToken);
-        await using var memoryStream = new MemoryStream();
-        await model.ImageFile.CopyToAsync(memoryStream, cancellationToken);
-
-        var analysis = await _visionService.AnalyzeImageAsync(uploadedUrl, memoryStream.ToArray(), cancellationToken);
-
-        model.ImageUrl = uploadedUrl;
-        model.Description = analysis.Description;
-        model.Tags = analysis.Tags;
-        model.IsCached = analysis.IsCached;
-
-        _historyService.Add(visitorId, new HistoryItem
+        try
         {
-            VisitorId = visitorId,
-            ImageUrl = uploadedUrl,
-            Description = analysis.Description,
-            Tags = analysis.Tags,
-            IsCached = analysis.IsCached,
-            CreatedAt = DateTimeOffset.UtcNow
-        });
+            var uploadedUrl = await _blobService.UploadFileAsync(model.ImageFile, cancellationToken);
+            await using var memoryStream = new MemoryStream();
+            await model.ImageFile.CopyToAsync(memoryStream, cancellationToken);
 
-        return View(model);
+            var analysis = await _visionService.AnalyzeImageAsync(uploadedUrl, memoryStream.ToArray(), cancellationToken);
+            model.ImageUrl = uploadedUrl;
+            model.Description = analysis.Description;
+            model.Tags = analysis.Tags;
+            model.IsCached = analysis.IsCached;
+
+            _historyService.Add(visitorId, new HistoryItem
+            {
+                VisitorId = visitorId,
+                ImageUrl = uploadedUrl,
+                Description = analysis.Description,
+                Tags = analysis.Tags,
+                IsCached = analysis.IsCached,
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+
+            return View(model);
+        }
+        catch (InvalidDataException exception)
+        {
+            ModelState.AddModelError("ImageFile", exception.Message);
+            return View(model);
+        }
     }
 
     [HttpGet]
-    public IActionResult History()
-    {
-        return View(_historyService.GetAll(GetOrCreateVisitorId()));
-    }
+    public IActionResult History() => View(_historyService.GetAll(GetOrCreateVisitorId()));
 
     private string GetOrCreateVisitorId()
     {
