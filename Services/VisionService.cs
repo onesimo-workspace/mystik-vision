@@ -44,7 +44,7 @@ public sealed class VisionService : IVisionService
             };
         }
 
-        var requestUri = new Uri($"{_endpoint}/vision/v3.2/analyze?visualFeatures=Description,Tags&language=en");
+        var requestUri = new Uri($"{_endpoint}/vision/v3.2/analyze?visualFeatures=Description,Tags,Objects,Categories,Color,ImageType,Brands,Faces&details=Celebrities,Landmarks&language=en");
         using var request = new HttpRequestMessage(HttpMethod.Post, requestUri);
         request.Headers.Add("Ocp-Apim-Subscription-Key", _subscriptionKey);
         request.Content = new StringContent(JsonSerializer.Serialize(new { url = imageUrl }), Encoding.UTF8, "application/json");
@@ -55,13 +55,10 @@ public sealed class VisionService : IVisionService
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
-        var description = ParseDescription(document);
-        var tags = ParseTags(document);
-
         var result = new VisionAnalysisResult
         {
-            Description = description,
-            Tags = tags,
+            Description = BuildDetailedDescription(document),
+            Tags = ParseTags(document),
             IsCached = false
         };
 
@@ -73,40 +70,112 @@ public sealed class VisionService : IVisionService
         return result;
     }
 
-    private static string ParseDescription(JsonDocument document)
+    private static string BuildDetailedDescription(JsonDocument document)
     {
-        if (document.RootElement.TryGetProperty("description", out var descriptionElement) &&
-            descriptionElement.TryGetProperty("captions", out var captions) &&
-            captions.GetArrayLength() > 0 &&
-            captions[0].TryGetProperty("text", out var textElement))
+        var parts = new List<string>();
+        var caption = ParseCaption(document);
+        if (!string.IsNullOrWhiteSpace(caption))
         {
-            return textElement.GetString() ?? "No description available.";
+            parts.Add(caption.TrimEnd('.') + ".");
         }
 
-        return "No description available.";
+        var objects = ParseNames(document, "objects");
+        if (objects.Count > 0)
+        {
+            parts.Add($"The image contains {JoinNatural(objects)}.");
+        }
+
+        var categories = ParseNames(document, "categories");
+        if (categories.Count > 0)
+        {
+            parts.Add($"It appears to show {JoinNatural(categories)}.");
+        }
+
+        var colors = ParseColorSummary(document);
+        if (!string.IsNullOrWhiteSpace(colors))
+        {
+            parts.Add(colors);
+        }
+
+        var tags = ParseTags(document);
+        if (tags.Count > 0)
+        {
+            parts.Add($"Notable concepts include {JoinNatural(tags.Take(8).ToList())}.");
+        }
+
+        return parts.Count > 0
+            ? string.Join(" ", parts)
+            : "No detailed description was available for this image.";
+    }
+
+    private static string ParseCaption(JsonDocument document)
+    {
+        if (document.RootElement.TryGetProperty("description", out var description) &&
+            description.TryGetProperty("captions", out var captions) &&
+            captions.ValueKind == JsonValueKind.Array && captions.GetArrayLength() > 0 &&
+            captions[0].TryGetProperty("text", out var text))
+        {
+            return text.GetString() ?? string.Empty;
+        }
+
+        return string.Empty;
     }
 
     private static IReadOnlyList<string> ParseTags(JsonDocument document)
     {
-        if (document.RootElement.TryGetProperty("tags", out var tagsElement) && tagsElement.ValueKind == JsonValueKind.Array)
-        {
-            var tags = new List<string>();
-            foreach (var tag in tagsElement.EnumerateArray())
-            {
-                if (tag.TryGetProperty("name", out var nameElement))
-                {
-                    var tagName = nameElement.GetString();
-                    if (!string.IsNullOrWhiteSpace(tagName))
-                    {
-                        tags.Add(tagName);
-                    }
-                }
-            }
+        return ParseNames(document, "tags");
+    }
 
-            return tags;
+    private static List<string> ParseNames(JsonDocument document, string propertyName)
+    {
+        var names = new List<string>();
+        if (!document.RootElement.TryGetProperty(propertyName, out var elements) || elements.ValueKind != JsonValueKind.Array)
+        {
+            return names;
         }
 
-        return Array.Empty<string>();
+        foreach (var element in elements.EnumerateArray())
+        {
+            if (element.TryGetProperty("name", out var name) && !string.IsNullOrWhiteSpace(name.GetString()))
+            {
+                var value = name.GetString()!;
+                if (!names.Contains(value, StringComparer.OrdinalIgnoreCase))
+                {
+                    names.Add(value);
+                }
+            }
+        }
+
+        return names;
+    }
+
+    private static string ParseColorSummary(JsonDocument document)
+    {
+        if (!document.RootElement.TryGetProperty("color", out var color))
+        {
+            return string.Empty;
+        }
+
+        var dominant = color.TryGetProperty("dominantColorForeground", out var foreground)
+            ? foreground.GetString()
+            : null;
+        var background = color.TryGetProperty("dominantColorBackground", out var backgroundElement)
+            ? backgroundElement.GetString()
+            : null;
+
+        if (string.IsNullOrWhiteSpace(foreground) && string.IsNullOrWhiteSpace(background))
+        {
+            return string.Empty;
+        }
+
+        return $"The dominant colors are {JoinNatural(new[] { foreground, background }.Where(x => !string.IsNullOrWhiteSpace(x)).Cast<string>().ToList())}.";
+    }
+
+    private static string JoinNatural(IReadOnlyList<string> values)
+    {
+        if (values.Count == 1) return values[0];
+        if (values.Count == 2) return $"{values[0]} and {values[1]}";
+        return $"{string.Join(", ", values.Take(values.Count - 1))}, and {values[^1]}";
     }
 
     private static string GetCacheKey(byte[] imageBytes)
