@@ -45,43 +45,73 @@ public sealed class VisionService : IVisionService
         using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
+        var tags = ParseTags(document);
         var result = new VisionAnalysisResult
         {
-            Description = BuildScholarlyDescription(document),
-            Tags = ParseTags(document),
+            Description = BuildScholarlyDescription(document, tags),
+            Tags = tags,
             IsCached = false
         };
         _cache.Set(cacheKey, result, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromHours(1) });
         return result;
     }
 
-    private static string BuildScholarlyDescription(JsonDocument document)
+    private static string BuildScholarlyDescription(JsonDocument document, IReadOnlyList<string> tags)
     {
-        var paragraphs = new List<string>();
+        var sections = new List<string>();
         var caption = ParseCaption(document);
         var objects = ParseNames(document, "objects", 0.55);
         var categories = ParseNames(document, "categories", 0.45);
-        var tags = ParseTags(document);
         var colors = ParseColorSummary(document);
 
-        if (!string.IsNullOrWhiteSpace(caption))
-            paragraphs.Add($"At a high level, the image presents {caption.TrimEnd('.')}.");
+        sections.Add("OVERVIEW");
+        sections.Add(!string.IsNullOrWhiteSpace(caption)
+            ? $"{caption.TrimEnd('.')}.")
+            : "The service did not return a reliable global caption.");
 
-        if (objects.Count > 0)
-            paragraphs.Add($"The most salient visible subjects are {JoinNatural(objects)}. These detections describe recognizable visual entities rather than asserting their purpose, identity, or activity beyond what the image evidence supports.");
+        sections.Add("
+OBSERVED SUBJECTS");
+        sections.Add(objects.Count > 0
+            ? $"The image contains {JoinNatural(objects)}. These are model detections of visible entities; they do not establish ownership, identity, purpose, or activity."
+            : "No object detections met the configured confidence threshold.");
 
-        if (categories.Count > 0)
-            paragraphs.Add($"In terms of setting and visual classification, the scene is consistent with {JoinNatural(categories)}.");
+        sections.Add("
+ENVIRONMENT");
+        sections.Add(categories.Count > 0
+            ? $"The visual classification is consistent with {JoinNatural(categories)}. This describes the apparent scene category, not a verified location."
+            : "The available evidence is insufficient to classify the environment with confidence.");
+
+        sections.Add("
+COMPOSITION");
+        sections.Add(objects.Count > 0
+            ? "The detected subjects form the principal visual structure of the frame, with the surrounding setting providing contextual information. Precise foreground, midground, and background relationships require region-level evidence and are not asserted here."
+            : "A reliable compositional account could not be derived from the available detections.");
 
         if (!string.IsNullOrWhiteSpace(colors))
-            paragraphs.Add(colors);
+        {
+            sections.Add("
+COLOUR");
+            sections.Add(colors);
+        }
+
+        sections.Add("
+INTERPRETATION");
+        sections.Add(objects.Count > 0
+            ? $"Taken together, the evidence suggests an image organized around {JoinNatural(objects.Take(5).ToList())}. The exact purpose, ownership, organization, and circumstances represented cannot be established from the image alone."
+            : "The image cannot be interpreted beyond the limited evidence returned by the vision provider.");
+
+        sections.Add("
+UNCERTAINTY");
+        sections.Add("Model confidence is evidence quality, not factual certainty. Names, identities, locations, intentions, and relationships are treated as unknown unless independently supported by explicit visual evidence.");
 
         if (tags.Count > 0)
-            paragraphs.Add($"Additional visual concepts include {JoinNatural(tags.Take(8).ToList())}. Taken together, these signals suggest the image should be read as a composition organized around its principal subjects, surrounding context, and color relationships, while avoiding claims that cannot be directly established from pixels alone.");
+        {
+            sections.Add("
+ADDITIONAL EVIDENCE");
+            sections.Add($"Detected concepts above threshold: {JoinNatural(tags.Take(8).ToList())}.");
+        }
 
-        return paragraphs.Count > 0
-            ? string.Join(" ", paragraphs)
-            : "The analysis service did not return sufficient visual evidence to produce a reliable detailed description.";
+        return string.Join(" ", sections);
     }
 
     private static string ParseCaption(JsonDocument document)
@@ -97,14 +127,26 @@ public sealed class VisionService : IVisionService
     {
         var names = new List<string>();
         if (!document.RootElement.TryGetProperty(propertyName, out var elements) || elements.ValueKind != JsonValueKind.Array) return names;
+
         foreach (var element in elements.EnumerateArray())
         {
-            var confidence = element.TryGetProperty("confidence", out var confidenceElement) ? confidenceElement.GetDouble() : 1.0;
-            if (confidence < minimumConfidence || !element.TryGetProperty("name", out var name)) continue;
-            var value = name.GetString();
+            var confidence = element.TryGetProperty("confidence", out var confidenceElement) && confidenceElement.ValueKind == JsonValueKind.Number
+                ? confidenceElement.GetDouble()
+                : 1.0;
+            if (confidence < minimumConfidence) continue;
+
+            // Azure Vision v3.2 uses "object" for object detections and "name" for tags/categories.
+            var value = GetStringProperty(element, "name") ?? GetStringProperty(element, "object");
             if (!string.IsNullOrWhiteSpace(value) && !names.Contains(value, StringComparer.OrdinalIgnoreCase)) names.Add(value);
         }
         return names;
+    }
+
+    private static string? GetStringProperty(JsonElement element, string propertyName)
+    {
+        return element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
     }
 
     private static string ParseColorSummary(JsonDocument document)
@@ -115,11 +157,12 @@ public sealed class VisionService : IVisionService
             color.TryGetProperty("dominantColorForeground", out var foreground) ? foreground.GetString() : null,
             color.TryGetProperty("dominantColorBackground", out var background) ? background.GetString() : null
         }.Where(value => !string.IsNullOrWhiteSpace(value)).Cast<string>().Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-        return values.Count == 0 ? string.Empty : $"Chromatically, the dominant visual fields are {JoinNatural(values)}, which provides a useful account of the image's overall tonal balance.";
+        return values.Count == 0 ? string.Empty : $"The dominant visual fields are {JoinNatural(values)}, creating the principal tonal contrast recorded by the provider.";
     }
 
     private static string JoinNatural(IReadOnlyList<string> values)
     {
+        if (values.Count == 0) return "no clearly identified subjects";
         if (values.Count == 1) return values[0];
         if (values.Count == 2) return $"{values[0]} and {values[1]}";
         return $"{string.Join(", ", values.Take(values.Count - 1))}, and {values[^1]}";
