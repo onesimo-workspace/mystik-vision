@@ -85,9 +85,10 @@ public sealed class AzureVisionAnalysisProvider : IVisionAnalysisProvider
     private static ColorAnalysis ParseColors(JsonElement root)
     {
         if (!root.TryGetProperty("color", out var color)) return new ColorAnalysis();
-        return new ColorAnalysis { DominantForegroundColor = StringProperty(color, "dominantColorForeground"), DominantBackgroundColor = StringProperty(color, "dominantColorBackground"), IsBlackAndWhite = color.TryGetProperty("isBWImg", out var bw) && bw.ValueKind == JsonValueKind.True || color.TryGetProperty("isBWImg", out bw) && bw.ValueKind == JsonValueKind.False ? bw.GetBoolean() : null };
+        return new ColorAnalysis { DominantForegroundColor = StringProperty(color, "dominantColorForeground"), DominantBackgroundColor = StringProperty(color, "dominantColorBackground"), IsBlackAndWhite = BooleanProperty(color, "isBWImg") };
     }
 
+    private static bool? BooleanProperty(JsonElement item, string property) => item.TryGetProperty(property, out var value) && (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.False) ? value.GetBoolean() : null;
     private static string? StringProperty(JsonElement item, string property) => item.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     private static double NumberProperty(JsonElement item, string property) => item.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number) ? number : 0;
     private static int IntProperty(JsonElement item, string property) => item.TryGetProperty(property, out var value) && value.TryGetInt32(out var number) ? number : 0;
