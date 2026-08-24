@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using System.Security.Cryptography;
+using app_dev_assignment.Models;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Caching.Memory;
@@ -29,10 +31,11 @@ public sealed class VisionService : IVisionService
 
     public async Task<VisionAnalysisResult> AnalyzeImageAsync(string imageUrl, byte[] imageBytes, CancellationToken cancellationToken = default)
     {
+        var started = Stopwatch.StartNew();
         var cacheKey = GetCacheKey(imageBytes);
         if (_cache.TryGetValue(cacheKey, out VisionAnalysisResult? cachedResult) && cachedResult is not null)
         {
-            return new VisionAnalysisResult { Description = cachedResult.Description, Tags = cachedResult.Tags, IsCached = true };
+            return new VisionAnalysisResult { Description = cachedResult.Description, Tags = cachedResult.Tags, Analysis = cachedResult.Analysis, IsCached = true };
         }
 
         var requestUri = new Uri($"{_endpoint}/vision/v3.2/analyze?visualFeatures=Description,Tags,Objects,Categories,Color,ImageType,Brands,Faces&details=Celebrities,Landmarks&language=en");
@@ -46,10 +49,13 @@ public sealed class VisionService : IVisionService
         using var document = await JsonDocument.ParseAsync(stream, cancellationToken: cancellationToken);
 
         var tags = ParseTags(document);
+        var objects = ParseObjects(document);
+        var structured = BuildStructuredAnalysis(document, imageBytes, objects, tags, started.Elapsed);
         var result = new VisionAnalysisResult
         {
             Description = BuildScholarlyDescription(document, tags),
             Tags = tags,
+            Analysis = structured,
             IsCached = false
         };
         _cache.Set(cacheKey, result, new MemoryCacheEntryOptions { SlidingExpiration = TimeSpan.FromHours(1) });
@@ -94,6 +100,58 @@ public sealed class VisionService : IVisionService
             sections.Add("ADDITIONAL EVIDENCE" + Environment.NewLine + $"Detected concepts above threshold: {JoinNatural(tags.Take(8).ToList())}.");
 
         return string.Join(separator, sections);
+    }
+
+
+    private static ImageAnalysisResult BuildStructuredAnalysis(JsonDocument document, byte[] imageBytes, IReadOnlyList<DetectedObject> objects, IReadOnlyList<string> tags, TimeSpan duration)
+    {
+        var categories = ParseNames(document, "categories", 0.45);
+        var color = ParseColors(document);
+        var caption = ParseCaption(document);
+        var hash = GetCacheKey(imageBytes).Replace("vision-analysis-", string.Empty, StringComparison.Ordinal);
+        var overview = !string.IsNullOrWhiteSpace(caption) ? caption.TrimEnd('.') + "." : "No reliable global caption was returned by the provider.";
+        var interpretations = objects.Count > 0 ? new[] { new Interpretation { Statement = $"The arrangement appears consistent with a visual scene organized around {JoinNatural(objects.Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase).Take(5).ToList())}.", EvidenceBasis = objects.Select(x => x.Name).Distinct(StringComparer.OrdinalIgnoreCase).ToArray(), Confidence = 0.60 } } : Array.Empty<Interpretation>();
+        return new ImageAnalysisResult
+        {
+            Metadata = new AnalysisMetadata { AnalysisId = Guid.NewGuid(), ImageHash = hash, CreatedAt = DateTimeOffset.UtcNow, ProcessingDuration = duration },
+            Overview = overview,
+            Objects = objects,
+            Tags = tags.Select((name, index) => new EvidenceTag { Name = name, Confidence = 0.55 }).ToArray(),
+            Scene = new SceneAnalysis { Categories = categories, Environment = categories.Count > 0 ? JoinNatural(categories) : "Unavailable" },
+            Colors = color,
+            Interpretations = interpretations,
+            Uncertainties = new[] { new Uncertainty { Statement = "The exact identity, location, ownership, and purpose represented cannot be established from the image alone.", Reason = "The current provider supplies visual detections, not verified contextual provenance." } },
+            Limitations = new[] { "OCR is unavailable in the current analyze request.", "Dense captions are unavailable in the current Azure Vision v3.2 integration.", "Model confidence indicates evidence quality, not factual certainty." }
+        };
+    }
+
+    private static IReadOnlyList<DetectedObject> ParseObjects(JsonDocument document)
+    {
+        var results = new List<DetectedObject>();
+        JsonElement elements;
+        if (document.RootElement.TryGetProperty("objects", out var direct) && direct.ValueKind == JsonValueKind.Array) elements = direct;
+        else if (document.RootElement.TryGetProperty("objectsResult", out var wrapped) && wrapped.TryGetProperty("values", out var values) && values.ValueKind == JsonValueKind.Array) elements = values;
+        else return results;
+        foreach (var element in elements.EnumerateArray())
+        {
+            var name = GetStringProperty(element, "object") ?? GetStringProperty(element, "name");
+            var confidence = element.TryGetProperty("confidence", out var score) && score.ValueKind == JsonValueKind.Number ? score.GetDouble() : 0;
+            if (string.IsNullOrWhiteSpace(name) || confidence < 0.55) continue;
+            BoundingBox? box = null;
+            if (element.TryGetProperty("rectangle", out var rectangle)) box = new BoundingBox { X = GetInt(rectangle, "x"), Y = GetInt(rectangle, "y"), Width = GetInt(rectangle, "w"), Height = GetInt(rectangle, "h") };
+            if (!results.Any(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.Location?.X == box?.X && x.Location?.Y == box?.Y)) results.Add(new DetectedObject { Name = name, Confidence = confidence, Location = box });
+        }
+        return results.OrderByDescending(x => x.Confidence).ToArray();
+    }
+
+    private static int GetInt(JsonElement element, string propertyName) => element.TryGetProperty(propertyName, out var value) && value.TryGetInt32(out var number) ? number : 0;
+
+    private static ColorAnalysis ParseColors(JsonDocument document)
+    {
+        if (!document.RootElement.TryGetProperty("color", out var color)) return new ColorAnalysis();
+        var foreground = color.TryGetProperty("dominantColorForeground", out var f) ? f.GetString() : null;
+        var background = color.TryGetProperty("dominantColorBackground", out var b) ? b.GetString() : null;
+        return new ColorAnalysis { DominantForegroundColor = foreground, DominantBackgroundColor = background, IsBlackAndWhite = color.TryGetProperty("isBWImg", out var bw) ? bw.GetBoolean() : null };
     }
 
     private static string ParseCaption(JsonDocument document)
