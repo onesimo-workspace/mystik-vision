@@ -46,6 +46,7 @@ public class HomeController : Controller
             model.Description = analysis.Description;
             model.Tags = analysis.Tags;
             model.IsCached = analysis.IsCached;
+            model.Analysis = analysis.Analysis;
 
             _historyService.Add(visitorId, new HistoryItem
             {
