@@ -63,55 +63,37 @@ public sealed class VisionService : IVisionService
         var objects = ParseNames(document, "objects", 0.55);
         var categories = ParseNames(document, "categories", 0.45);
         var colors = ParseColorSummary(document);
+        var separator = Environment.NewLine + Environment.NewLine;
 
-        sections.Add("OVERVIEW");
-        sections.Add(!string.IsNullOrWhiteSpace(caption)
-            ? $"{caption.TrimEnd('.')}.")
-            : "The service did not return a reliable global caption.");
+        sections.Add("OVERVIEW" + Environment.NewLine + (!string.IsNullOrWhiteSpace(caption)
+            ? $"{caption.TrimEnd('.')}."
+            : "The service did not return a reliable global caption."));
 
-        sections.Add("
-OBSERVED SUBJECTS");
-        sections.Add(objects.Count > 0
+        sections.Add("OBSERVED SUBJECTS" + Environment.NewLine + (objects.Count > 0
             ? $"The image contains {JoinNatural(objects)}. These are model detections of visible entities; they do not establish ownership, identity, purpose, or activity."
-            : "No object detections met the configured confidence threshold.");
+            : "No object detections met the configured confidence threshold."));
 
-        sections.Add("
-ENVIRONMENT");
-        sections.Add(categories.Count > 0
+        sections.Add("ENVIRONMENT" + Environment.NewLine + (categories.Count > 0
             ? $"The visual classification is consistent with {JoinNatural(categories)}. This describes the apparent scene category, not a verified location."
-            : "The available evidence is insufficient to classify the environment with confidence.");
+            : "The available evidence is insufficient to classify the environment with confidence."));
 
-        sections.Add("
-COMPOSITION");
-        sections.Add(objects.Count > 0
+        sections.Add("COMPOSITION" + Environment.NewLine + (objects.Count > 0
             ? "The detected subjects form the principal visual structure of the frame, with the surrounding setting providing contextual information. Precise foreground, midground, and background relationships require region-level evidence and are not asserted here."
-            : "A reliable compositional account could not be derived from the available detections.");
+            : "A reliable compositional account could not be derived from the available detections."));
 
         if (!string.IsNullOrWhiteSpace(colors))
-        {
-            sections.Add("
-COLOUR");
-            sections.Add(colors);
-        }
+            sections.Add("COLOUR" + Environment.NewLine + colors);
 
-        sections.Add("
-INTERPRETATION");
-        sections.Add(objects.Count > 0
+        sections.Add("INTERPRETATION" + Environment.NewLine + (objects.Count > 0
             ? $"Taken together, the evidence suggests an image organized around {JoinNatural(objects.Take(5).ToList())}. The exact purpose, ownership, organization, and circumstances represented cannot be established from the image alone."
-            : "The image cannot be interpreted beyond the limited evidence returned by the vision provider.");
+            : "The image cannot be interpreted beyond the limited evidence returned by the vision provider."));
 
-        sections.Add("
-UNCERTAINTY");
-        sections.Add("Model confidence is evidence quality, not factual certainty. Names, identities, locations, intentions, and relationships are treated as unknown unless independently supported by explicit visual evidence.");
+        sections.Add("UNCERTAINTY" + Environment.NewLine + "Model confidence is evidence quality, not factual certainty. Names, identities, locations, intentions, and relationships are treated as unknown unless independently supported by explicit visual evidence.");
 
         if (tags.Count > 0)
-        {
-            sections.Add("
-ADDITIONAL EVIDENCE");
-            sections.Add($"Detected concepts above threshold: {JoinNatural(tags.Take(8).ToList())}.");
-        }
+            sections.Add("ADDITIONAL EVIDENCE" + Environment.NewLine + $"Detected concepts above threshold: {JoinNatural(tags.Take(8).ToList())}.");
 
-        return string.Join(" ", sections);
+        return string.Join(separator, sections);
     }
 
     private static string ParseCaption(JsonDocument document)
@@ -135,7 +117,6 @@ ADDITIONAL EVIDENCE");
                 : 1.0;
             if (confidence < minimumConfidence) continue;
 
-            // Azure Vision v3.2 uses "object" for object detections and "name" for tags/categories.
             var value = GetStringProperty(element, "name") ?? GetStringProperty(element, "object");
             if (!string.IsNullOrWhiteSpace(value) && !names.Contains(value, StringComparer.OrdinalIgnoreCase)) names.Add(value);
         }
@@ -144,9 +125,7 @@ ADDITIONAL EVIDENCE");
 
     private static string? GetStringProperty(JsonElement element, string propertyName)
     {
-        return element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String
-            ? value.GetString()
-            : null;
+        return element.TryGetProperty(propertyName, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
     }
 
     private static string ParseColorSummary(JsonDocument document)
