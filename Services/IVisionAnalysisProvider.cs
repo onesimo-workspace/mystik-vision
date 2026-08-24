@@ -9,7 +9,7 @@ public sealed class VisionProviderResult
     public string Provider { get; init; } = "Azure Computer Vision";
     public string ApiVersion { get; init; } = "v3.2";
     public string? Caption { get; init; }
-    public IReadOnlyList<string> Tags { get; init; } = Array.Empty<string>();
+    public IReadOnlyList<EvidenceTag> Tags { get; init; } = Array.Empty<EvidenceTag>();
     public IReadOnlyList<DetectedObject> Objects { get; init; } = Array.Empty<DetectedObject>();
     public IReadOnlyList<string> Categories { get; init; } = Array.Empty<string>();
     public ColorAnalysis Colors { get; init; } = new();
@@ -54,7 +54,7 @@ public sealed class AzureVisionAnalysisProvider : IVisionAnalysisProvider
         string? caption = null;
         if (root.TryGetProperty("description", out var description) && description.TryGetProperty("captions", out var captions) && captions.ValueKind == JsonValueKind.Array)
             caption = captions.EnumerateArray().Select(x => x.TryGetProperty("text", out var text) ? text.GetString() : null).FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
-        return new VisionProviderResult { Caption = caption, Tags = ParseNames(root, "tags", 0.55), Categories = ParseNames(root, "categories", 0.45), Objects = ParseObjects(root), Colors = ParseColors(root) };
+        return new VisionProviderResult { Caption = caption, Tags = ParseTags(root), Categories = ParseNames(root, "categories", 0.45), Objects = ParseObjects(root), Colors = ParseColors(root) };
     }
 
     private static IReadOnlyList<DetectedObject> ParseObjects(JsonElement root)
@@ -74,6 +74,12 @@ public sealed class AzureVisionAnalysisProvider : IVisionAnalysisProvider
             if (!result.Any(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase) && x.Location?.X == location?.X && x.Location?.Y == location?.Y)) result.Add(new DetectedObject { Name = name, Confidence = confidence, Location = location });
         }
         return result.OrderByDescending(x => x.Confidence).ToArray();
+    }
+
+    private static IReadOnlyList<EvidenceTag> ParseTags(JsonElement root)
+    {
+        if (!root.TryGetProperty("tags", out var array) || array.ValueKind != JsonValueKind.Array) return Array.Empty<EvidenceTag>();
+        return array.EnumerateArray().Where(x => NumberProperty(x, "confidence") >= 0.55).Select(x => new EvidenceTag { Name = StringProperty(x, "name") ?? String.Empty, Confidence = NumberProperty(x, "confidence") }).Where(x => !String.IsNullOrWhiteSpace(x.Name)).GroupBy(x => x.Name, StringComparer.OrdinalIgnoreCase).Select(x => x.OrderByDescending(y => y.Confidence).First()).ToArray();
     }
 
     private static IReadOnlyList<string> ParseNames(JsonElement root, string property, double threshold)
